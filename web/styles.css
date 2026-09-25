@@ -138,3 +138,25 @@ svg.sheet { background: #e9dfc6; border: 2px solid #6b5c3c; border-radius: 3px; 
 .detail-table tr.chosen td:first-child { border-left: 4px solid var(--green); }
 .detail-table tr.excluded td:first-child { border-left: 4px solid #c6b08d; }
 .muted { color: #8c8574; }
+
+/* 顶部锯缝宽度与复核按钮 */
+.kerf-box { display: inline-flex; align-items: center; gap: 6px; color: #f3ead6; font-size: 12.5px; }
+.kerf-box label { white-space: nowrap; }
+.kerf-box input { width: 64px; }
+.toolbar .primary { background: #5d4037; border-color: #3e2723; }
+.toolbar .primary:hover { background: #6f4d42; }
+
+/* 裁切复核区 */
+.cut-sheet { border-top: 2px dashed var(--line); padding-top: 10px; }
+.cut-viz-row { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; margin: 6px 0; }
+.cut-legend { font-size: 12px; color: #5c5546; line-height: 2; min-width: 220px; flex: 1; }
+.sw { display: inline-block; width: 16px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,0.25); }
+.sw.patch { background: #2e7d43; opacity: 0.72; }
+.sw.band { background: rgba(176, 58, 46, 0.25); border: 1px dashed var(--red); }
+.sw.region { background: transparent; border: 1.6px dashed var(--navy); }
+.sw.taken { background: rgba(46, 125, 67, 0.15); }
+.step-control { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.step-control input[type="range"] { width: 220px; vertical-align: middle; }
+.cut-steps tr.step-cut.active td { background: #fdf2e0; }
+.cut-steps tr.step-take td { background: #eef6ec; }
+.cut-sheet-svg { background: #e9dfc6; border: 2px solid #6b5c3c; border-radius: 3px; }

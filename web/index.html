@@ -11,6 +11,11 @@
     <h1>⚓ 主帆修补 · 帆布联合排版工作台</h1>
     <div class="toolbar">
       <button id="btn-plan" class="primary" type="button">🧭 排版（联合选优）</button>
+      <span class="kerf-box">
+        <label for="inp-kerf">锯缝宽度</label>
+        <input id="inp-kerf" type="number" min="1" step="1" value="2" />
+        <button id="btn-cut-review" class="primary" type="button">🪚 直线裁切顺序复核</button>
+      </span>
       <button id="btn-save" type="button">保存草稿</button>
       <button id="btn-reset" type="button">恢复示例草稿</button>
       <span id="status" class="status"></span>
@@ -41,7 +46,7 @@
 
       <div class="col-right">
         <section id="stale-banner" class="banner hidden">
-          ⚠ 草稿自上次排版后已修改，以下为<strong>已失效的旧结论</strong>，请重新点击「排版」。
+          ⚠ 草稿或锯缝宽度自上次计算后已修改，以下为<strong>已失效的旧结论</strong>，请重新点击「排版」或「直线裁切顺序复核」。
         </section>
         <section id="result" class="card">
           <h2>排版结论</h2>
@@ -49,6 +54,15 @@
             依次按 ① 使用帆布张数最少 ② 各已用帆布剩余面积最大值最小 ③ 候选序号字典序最小 选优，
             避免局部挑选最省料位置后使其他补片无处可裁。</p>
           <div id="result-body"></div>
+        </section>
+
+        <section id="cut-card" class="card">
+          <h2>直线裁切顺序复核</h2>
+          <p class="hint">填入正整数锯缝宽度后点击「🪚 直线裁切顺序复核」。系统会<strong>先按当前草稿重新执行联合排版</strong>
+            （不接收页面上的采用结果），再逐张帆布复核采用裁片能否只凭“一块未分割矩形内横或竖的贯穿直线”依次切下：
+            每刀锯缝占据同宽带状区域，与未取裁片正面积相交即判伤片；废料区域可停止处理。
+            在全部可保全裁片的切法中，依次选 ① 总刀数最少 ② 按帆布录入顺序展开的（方向、坐标）序列最小。</p>
+          <div id="cut-body"><p class="hint">尚未复核。</p></div>
         </section>
       </div>
     </div>

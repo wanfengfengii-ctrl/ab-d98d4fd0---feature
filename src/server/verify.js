@@ -2,7 +2,7 @@
  * verify 一次性服务：依次运行
  *   1) 代码测试（node --test，test/ 下的领域单测）
  *   2) 前端构建（esbuild → dist/）
- *   3) 候选冲突业务冒烟（默认草稿的联合求解断言）
+ *   3) 业务冒烟（默认草稿联合求解断言 + 直线裁切的“可切”与“锯缝阻断”断言）
  * 以退出码报告总体结果：0 全部通过；非 0 存在失败。自身运行结束即退出，
  * 不监听端口（供 docker compose run --rm verify 使用）。
  */
@@ -37,7 +37,7 @@ async function main() {
   const buildCode = await run(process.execPath, ['scripts/build.js'], '前端构建');
   results.push(['前端构建', buildCode]);
 
-  console.log('\n=== [verify] 候选冲突业务冒烟 ===');
+  console.log('\n=== [verify] 业务冒烟（可切与锯缝阻断） ===');
   let smokeCode = 0;
   try {
     const smoke = runSmoke();
@@ -50,7 +50,7 @@ async function main() {
     smokeCode = 1;
   }
   console.log(`=== [verify] 业务冒烟 退出码 ${smokeCode} ===`);
-  results.push(['候选冲突业务冒烟', smokeCode]);
+  results.push(['业务冒烟（可切与锯缝阻断）', smokeCode]);
 
   console.log('\n=== [verify] 汇总 ===');
   let failed = 0;

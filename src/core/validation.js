@@ -118,6 +118,17 @@ export function validateDraft(draft) {
   return { ok: errors.length === 0, errors };
 }
 
+/**
+ * 锯缝宽度校验：必须为正整数。
+ * @returns {{ok: boolean, errors: string[]}}
+ */
+export function validateKerf(kerf) {
+  if (!isInt(kerf) || kerf <= 0) {
+    return { ok: false, errors: ['锯缝宽度须为正整数（像素）。'] };
+  }
+  return { ok: true, errors: [] };
+}
+
 /** 矩形正面积重叠（边界相接不算）。 */
 export function rectsOverlap(a, b) {
   return a.x < b.x + b.width &&

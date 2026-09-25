@@ -1,11 +1,13 @@
 /**
- * 候选冲突业务冒烟：不经 HTTP，直接以默认草稿走一遍领域管线，
- * 断言联合求解识别出“局部省料会令其他补片无处可裁”的情形。
+ * 业务冒烟：不经 HTTP，直接以默认草稿走一遍领域管线。
+ *  - 联合求解识别出“局部省料会令其他补片无处可裁”的情形；
+ *  - 直线裁切复核：小锯缝可切（给出最少刀数顺序），大锯缝被阻断（给出首个伤片证据）。
  *
  * @returns {{passed: boolean, checks: Array<{name:string, ok:boolean, detail:string}>}}
  */
 import { planLayout } from '../core/planner.js';
-import { validateDraft } from '../core/validation.js';
+import { validateDraft, validateKerf } from '../core/validation.js';
+import { reviewCutting } from '../core/cutting.js';
 import { defaultDraft } from './defaultDraft.js';
 
 export function runSmoke() {
@@ -64,6 +66,37 @@ export function runSmoke() {
     !noFitPlan.feasible && noFitPlan.infeasible.firstPatchIndex === 1,
     noFitPlan.feasible ? '误判为有解' :
       `首块序号（0 起）=${noFitPlan.infeasible.firstPatchIndex}`);
+
+  // ---- 直线裁切顺序复核 ----
+  record('锯缝宽度必须为正整数（0 / 负数 / 小数被拒）',
+    validateKerf(2).ok && !validateKerf(0).ok && !validateKerf(-3).ok && !validateKerf(1.2).ok,
+    'validateKerf(2) 通过，其余拒绝');
+
+  const planAgain = planLayout(defaultDraft);
+
+  // 小锯缝：默认草稿 kerf=2 必须可切，且总刀数等于各布刀数之和。
+  const cutOk = reviewCutting(defaultDraft, planAgain, 2);
+  const sumCuts = cutOk.reviews.reduce((s, r) => s + r.cutCount, 0);
+  record('裁切复核（锯缝宽 2）：采用裁片可依次切下', cutOk.feasible,
+    cutOk.feasible ? `总刀数 ${cutOk.totalCuts}` : '误判为不可切');
+  record('裁切复核：总刀数为各帆布刀数之和，切线序列按帆布顺序展开',
+    cutOk.feasible && cutOk.totalCuts === sumCuts && cutOk.cutSequence.length === sumCuts,
+    `总 ${cutOk.totalCuts} 刀：${cutOk.reviews.map((r) => `${r.canvasId}=${r.cutCount}`).join('，')}`);
+
+  // 大锯缝：kerf=3 时乙布边缘只剩 2 单位容不下 3 单位锯缝 → 必须判为阻断，
+  // 并按帆布顺序给出首个被锯缝阻断的裁片证据。
+  const cutBad = reviewCutting(defaultDraft, planAgain, 3);
+  const blockedRv = cutBad.feasible ? null : cutBad.reviews[cutBad.blockedCanvasIndex];
+  record('裁切复核（锯缝宽 3）：锯缝阻断时判定不可切', !cutBad.feasible,
+    cutBad.feasible ? '误判为可切' : `阻断发生在 ${blockedRv.canvasId}`);
+  record('锯缝阻断证据：给出帆布、首个被伤裁片与剩余矩形',
+    !cutBad.feasible &&
+    Number.isInteger(cutBad.blockedCanvasIndex) &&
+    Number.isInteger(blockedRv.blocked.patchIndex) &&
+    !!blockedRv.blocked.region && /正面积相交/.test(blockedRv.blocked.reason),
+    !cutBad.feasible
+      ? `${blockedRv.canvasId} · 补片 ${blockedRv.blocked.patchIndex + 1} · 剩余矩形 ${JSON.stringify(blockedRv.blocked.region)}`
+      : '');
 
   return { passed: checks.every((c) => c.ok), checks };
 }

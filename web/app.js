@@ -12,6 +12,9 @@ const state = {
   draft: null,
   result: null, // { version, output }
   resultVersion: null, // 当前页面上展示的结论对应的草稿版本
+  cutResult: null, // { version, kerf, plan, review }
+  cutResultVersion: null,
+  kerf: 2,
 };
 
 const GRAIN_TEXT = { warp: '经纱 warp', weft: '纬纱 weft' };
@@ -39,14 +42,25 @@ async function load() {
   state.version = r.version;
   state.result = r.result;
   state.resultVersion = r.result ? r.result.version : null;
+  state.cutResult = r.cutResult || null;
+  state.cutResultVersion = r.cutResult ? r.cutResult.version : null;
+  if (r.cutResult) state.kerf = r.cutResult.kerf;
+  $('#inp-kerf').value = state.kerf;
   renderAll();
 }
 
 function markDirty() {
-  // 任何录入变更都使旧结论在 UI 上立即失效（保存后服务端版本推进）。
-  if (state.result) {
-    state.resultVersion = -1;
-    renderResult();
+  // 任何草稿录入变更都使旧结论在 UI 上立即失效（保存后服务端版本推进）。
+  let changed = false;
+  if (state.result) { state.resultVersion = -1; changed = true; }
+  if (state.cutResult) { state.cutResultVersion = -1; changed = true; }
+  if (changed) { renderResult(); renderCutResult(); }
+}
+
+function markCutDirty() {
+  if (state.cutResult) {
+    state.cutResultVersion = -1;
+    renderCutResult();
   }
 }
 
@@ -189,21 +203,358 @@ function candidateRowHtml(cd, cdi, patch) {
     <button type="button" class="mini danger" data-act="del-cand">移除</button>`;
 }
 
+// ---------- 裁切复核结论区 ----------
+
+const DIR_TEXT = { vertical: '竖切', horizontal: '横切' };
+
+function updateStaleBanner() {
+  const planStale = state.result && (state.result.version !== state.version || state.resultVersion === -1);
+  const cutStale = state.cutResult && (state.cutResult.version !== state.version || state.cutResultVersion === -1);
+  $('#stale-banner').classList.toggle('hidden', !planStale && !cutStale);
+}
+
+function renderCutResult() {
+  updateStaleBanner();
+  const body = $('#cut-body');
+  const cr = state.cutResult;
+  if (!cr) {
+    body.innerHTML = '<p class="hint">尚未复核。</p>';
+    return;
+  }
+  if (!cr.plan.feasible) {
+    body.innerHTML = '<p class="verdict-bad">✘ 当前草稿联合排版本身无解，无法进行裁切复核。请先在上方排版结论中处理冲突。</p>';
+    return;
+  }
+  if (!cr.review.feasible) {
+    body.innerHTML = renderCutBlocked(cr);
+    const host = body.querySelector('[data-block-svg]');
+    if (host) host.appendChild(renderBlockedSvg(cr));
+    return;
+  }
+  body.innerHTML = renderCutFeasible(cr);
+  bindCutSteppers(cr);
+}
+
+function renderCutFeasible(cr) {
+  const { review, kerf } = cr;
+  const seqText = review.cutSequence.length
+    ? review.cutSequence.map((c) => `${canvasName(c.canvasId)} ${c.dir === 'vertical' ? 'V' : 'H'}${c.at}`).join(' → ')
+    : '（无需下刀，裁片已与可裁区相等）';
+  const sheets = review.reviews.map((rv) => cutSheetCard(cr, rv)).join('');
+  return `
+    <p class="verdict-ok">✔ 采用裁片可在不伤片的前提下依次切下（锯缝宽 ${kerf}）。</p>
+    <div class="summary">
+      <span class="metric">总刀数 <b>${review.totalCuts}</b></span>
+      <span class="metric">切线序列（按帆布顺序）<b>${seqText}</b></span>
+    </div>
+    <p class="reason">切线记号：V=竖切（沿 x 坐标的竖直锯缝带），H=横切（沿 y 坐标的水平锯缝带）。
+      序列在总刀数最少的全部切法中字典序最小。拖动每张帆布下的步骤滑块可查看每刀前后的剩余区域与已取下补片。</p>
+    ${sheets}`;
+}
+
+function cutSheetCard(cr, rv) {
+  const usage = cr.plan.usage.find((u) => u.canvasId === rv.canvasId);
+  const steps = rv.steps || [];
+  const cutCount = rv.cutCount;
+  const rows = steps.map((s, i) => {
+    if (s.kind === 'take') {
+      const p = state.draft.patches[s.patchIndex];
+      return `<tr class="step-take">
+        <td>${i + 1}</td><td>取下补片</td>
+        <td>「${escapeHtml(p.name)}」（补片 ${s.patchIndex + 1}）矩形 (${s.rect.x},${s.rect.y}) ${s.rect.width}×${s.rect.height}</td>
+        <td>该矩形已与所在剩余矩形完全相等，直接取下，不耗刀。</td></tr>`;
+    }
+    const band = s.dir === 'vertical'
+      ? `x∈[${s.at}, ${s.at + s.kerf})`
+      : `y∈[${s.at}, ${s.at + s.kerf})`;
+    const produced = s.produced.map((r) => rectText(r)).join('、') || '无';
+    const waste = (s.discarded || []).map((r) => rectText(r)).join('、') || '无';
+    return `<tr class="step-cut" data-step="${i}">
+      <td>${i + 1}</td>
+      <td><b>${DIR_TEXT[s.dir]}</b> @${s.at}<br><span class="reason">锯缝带 ${band}，宽 ${s.kerf}</span></td>
+      <td>落刀于剩余矩形 ${rectText(s.region)}<br>
+        切前活动区域：${s.before.map(rectText).join('、')}<br>
+        切后活动区域：${s.after.map(rectText).join('、')}</td>
+      <td>新剩余矩形：${produced}<br>废料（停止处理）：${waste}</td></tr>`;
+  }).join('');
+  return `
+  <div class="canvas-sheet cut-sheet" data-canvas="${rv.canvasId}">
+    <h3>${escapeHtml(rv.canvasName)}（${escapeHtml(rv.canvasId)}）
+      <span class="legend">${cutCount === 0 ? '无需下刀' : `共 ${cutCount} 刀，取下 ${usage.placed.length} 片`}</span></h3>
+    <div class="cut-viz-row">
+      <div class="sheet-wrap" data-cut-svg></div>
+      <div class="cut-legend">
+        <div><span class="sw patch"></span>采用裁片（P# 为补片序号）</div>
+        <div><span class="sw band"></span>锯缝带（标号＝下刀次序）</div>
+        <div><span class="sw region"></span>当前活动剩余矩形轮廓</div>
+        <div><span class="sw taken"></span>已取下补片</div>
+        <div class="step-control">
+          <label>步骤进度 <input type="range" min="0" max="${steps.length}" value="0" data-step-slider /></label>
+          <div data-step-caption class="reason">第 0 / ${steps.length} 步：初始可裁区，尚未下刀。</div>
+        </div>
+      </div>
+    </div>
+    <table class="detail-table cut-steps">
+      <thead><tr><th style="width:42px">#</th><th style="width:150px">动作</th><th>每刀前后的剩余区域</th><th>分割结果</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderCutBlocked(cr) {
+  const { review, kerf } = cr;
+  const bi = review.blockedCanvasIndex;
+  const rv = review.reviews[bi];
+  const b = rv.blocked;
+  const p = state.draft.patches[b.patchIndex];
+  const prior = (rv.steps || []).map((s, i) => {
+    if (s.kind === 'take') return `<li>第 ${i + 1} 步：取下「${escapeHtml(state.draft.patches[s.patchIndex].name)}」</li>`;
+    return `<li>第 ${i + 1} 步：在 ${rectText(s.region)} 内${DIR_TEXT[s.dir]}@${s.at}（锯缝 [${s.at}, ${s.at + s.kerf})），` +
+      `切后区域：${s.after.map(rectText).join('、')}</li>`;
+  }).join('');
+  // 其它帆布状态
+  const others = review.reviews.filter((_, i) => i !== bi).map((o) =>
+    `<li>${escapeHtml(o.canvasName)}（${o.canvasId}）：${o.feasible ? `可切，${o.cutCount} 刀` : '同样被阻断'}</li>`).join('');
+  return `
+    <p class="verdict-bad">✘ 锯缝宽 ${kerf} 时无法裁切。按帆布录入顺序与步骤顺序，首个被锯缝阻断的是
+      ${escapeHtml(rv.canvasName)}（${rv.canvasId}）上的补片 ${b.patchIndex + 1} ·「${escapeHtml(p.name)}」。</p>
+    <div class="summary">
+      <span class="metric">阻断裁片矩形 <b>(${b.rect.x},${b.rect.y}) ${b.rect.width}×${b.rect.height}</b></span>
+      <span class="metric">所处剩余矩形 <b>(${b.region.x},${b.region.y}) ${b.region.width}×${b.region.height}</b></span>
+    </div>
+    <p class="reason bad">${escapeHtml(b.reason)}</p>
+    <div class="cut-viz-row"><div class="sheet-wrap" data-block-svg></div></div>
+    ${prior ? `<p class="reason">阻断前已执行的步骤：</p><ul class="reason">${prior}</ul>` : '<p class="reason">第一刀就无处可落：初始可裁区内不存在不伤片的横/竖贯穿刀位。</p>'}
+    ${others ? `<p class="reason">其余帆布：</p><ul class="reason">${others}</ul>` : ''}
+    <p class="reason">可减小锯缝宽度、移动候选位置以留出落刀缝隙，或调整草稿后重新复核。</p>`;
+}
+
+function rectText(r) {
+  return `(${r.x},${r.y}) ${r.width}×${r.height}`;
+}
+
+function cssEsc(s) {
+  return String(s).replace(/["\\]/g, '\\$&');
+}
+
+/** 阻断情形的静态示意：标出可裁区、各采用裁片与被阻断的剩余矩形。 */
+function renderBlockedSvg(cr) {
+  const bi = cr.review.blockedCanvasIndex;
+  const rv = cr.review.reviews[bi];
+  const usage = cr.plan.usage.find((u) => u.canvasId === rv.canvasId);
+  const b = rv.blocked;
+  const pad = 14;
+  const scale = Math.min(480 / usage.width, 3.4);
+  const w = usage.width * scale;
+  const h = usage.height * scale;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'sheet cut-sheet-svg');
+  svg.setAttribute('viewBox', `0 0 ${w + pad * 2} ${h + pad * 2}`);
+  svg.setAttribute('width', w + pad * 2);
+  svg.setAttribute('height', h + pad * 2);
+  const g = document.createElementNS(ns, 'g');
+  g.setAttribute('transform', `translate(${pad},${pad})`);
+  svg.appendChild(g);
+  const add = (tag, attrs, text) => {
+    const el = document.createElementNS(ns, tag);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+    if (text != null) el.textContent = text;
+    g.appendChild(el);
+    return el;
+  };
+  add('rect', { x: 0, y: 0, width: w, height: h, fill: '#e9dfc6' });
+  const cut = usage.cuttable;
+  add('rect', {
+    x: cut.x * scale, y: cut.y * scale, width: cut.width * scale, height: cut.height * scale,
+    fill: '#f8f2df', stroke: '#8a7a50', 'stroke-dasharray': '4 3',
+  });
+  usage.placed.forEach((pl) => {
+    const blocked = pl.patchIndex === b.patchIndex;
+    const color = blocked ? '#b03a2e' : PATCH_COLORS[pl.patchIndex % PATCH_COLORS.length];
+    add('rect', {
+      x: pl.rect.x * scale, y: pl.rect.y * scale,
+      width: pl.rect.width * scale, height: pl.rect.height * scale,
+      fill: color, 'fill-opacity': blocked ? 0.82 : 0.55, stroke: color, 'stroke-width': 1.5,
+    });
+    add('text', { x: pl.rect.x * scale + 4, y: pl.rect.y * scale + 14,
+      'font-size': 11, fill: '#fff', 'font-weight': 700 }, `P${pl.patchIndex + 1}${blocked ? ' 阻断' : ''}`);
+  });
+  add('rect', {
+    x: b.region.x * scale, y: b.region.y * scale,
+    width: b.region.width * scale, height: b.region.height * scale,
+    fill: 'none', stroke: '#b03a2e', 'stroke-width': 2.4, 'stroke-dasharray': '7 3',
+  });
+  return svg;
+}
+
+/** 交互式帆布 SVG：概览（全部锯缝带标号）＋ 滑块驱动的每步状态。 */
+function bindCutSteppers(cr) {
+  cr.review.reviews.forEach((rv) => {
+    const card = document.querySelector(`.cut-sheet[data-canvas="${cssEsc(rv.canvasId)}"]`);
+    if (!card) return;
+    const usage = cr.plan.usage.find((u) => u.canvasId === rv.canvasId);
+    const svgHost = card.querySelector('[data-cut-svg]');
+    const slider = card.querySelector('[data-step-slider]');
+    const caption = card.querySelector('[data-step-caption]');
+    const ctx = makeCutSvg(usage, rv, cr.kerf);
+    svgHost.innerHTML = ctx.svg;
+
+    const states = buildCutStates(usage, rv.steps);
+    slider.addEventListener('input', () => {
+      const t = Number(slider.value);
+      ctx.render(states, t);
+      const s = rv.steps[t - 1];
+      if (!s) caption.textContent = `第 0 / ${rv.steps.length} 步：初始可裁区，尚未下刀。`;
+      else if (s.kind === 'take') caption.textContent = `第 ${t} / ${rv.steps.length} 步：取下「${state.draft.patches[s.patchIndex].name}」。`;
+      else caption.textContent = `第 ${t} / ${rv.steps.length} 步：在 ${rectText(s.region)} 内${DIR_TEXT[s.dir]}@${s.at}，锯缝带宽 ${s.kerf}。`;
+      card.querySelectorAll('tr.step-cut').forEach((tr) => {
+        tr.classList.toggle('active', Number(tr.dataset.step) === t - 1);
+      });
+    });
+    slider.dispatchEvent(new Event('input'));
+  });
+}
+
+/** 依据步骤序列重建每一步之后的（活动区域、已取裁片、当步刀带）状态。 */
+function buildCutStates(usage, steps) {
+  let regions = [usage.cuttable];
+  const removed = new Set();
+  const states = [{ regions: [usage.cuttable], removed: new Set(), band: null }];
+  steps.forEach((s) => {
+    if (s.kind === 'cut') {
+      regions = s.after.map((r) => ({ ...r }));
+      states.push({
+        regions: regions.map((r) => ({ ...r })),
+        removed: new Set(removed),
+        band: { dir: s.dir, at: s.at, kerf: s.kerf, region: s.region },
+      });
+    } else {
+      removed.add(s.patchIndex);
+      states.push({ regions: regions.map((r) => ({ ...r })), removed: new Set(removed), band: null });
+    }
+  });
+  return states;
+}
+
+function makeCutSvg(usage, rv, kerf) {
+  const pad = 14;
+  const maxW = 480;
+  const scale = Math.min(maxW / usage.width, 3.4);
+  const w = usage.width * scale;
+  const h = usage.height * scale;
+  const cut = usage.cuttable;
+  const svgNs = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNs, 'svg');
+  svg.setAttribute('class', 'sheet cut-sheet-svg');
+  svg.setAttribute('width', w + pad * 2);
+  svg.setAttribute('height', h + pad * 2);
+  svg.setAttribute('viewBox', `0 0 ${w + pad * 2} ${h + pad * 2}`);
+  const g = document.createElementNS(svgNs, 'g');
+  g.setAttribute('transform', `translate(${pad},${pad})`);
+  svg.appendChild(g);
+
+  const bg = document.createElementNS(svgNs, 'rect');
+  bg.setAttribute('x', 0); bg.setAttribute('y', 0);
+  bg.setAttribute('width', w); bg.setAttribute('height', h);
+  bg.setAttribute('fill', '#e9dfc6');
+  g.appendChild(bg);
+
+  const cutEl = document.createElementNS(svgNs, 'rect');
+  cutEl.setAttribute('x', cut.x * scale); cutEl.setAttribute('y', cut.y * scale);
+  cutEl.setAttribute('width', cut.width * scale); cutEl.setAttribute('height', cut.height * scale);
+  cutEl.setAttribute('fill', '#f8f2df'); cutEl.setAttribute('stroke', '#8a7a50');
+  cutEl.setAttribute('stroke-dasharray', '4 3');
+  g.appendChild(cutEl);
+
+  // 裁片层（取片状态驱动透明度）
+  const patchEls = new Map();
+  usage.placed.forEach((pl) => {
+    const pg = document.createElementNS(svgNs, 'g');
+    const color = PATCH_COLORS[pl.patchIndex % PATCH_COLORS.length];
+    const r = document.createElementNS(svgNs, 'rect');
+    r.setAttribute('x', pl.rect.x * scale); r.setAttribute('y', pl.rect.y * scale);
+    r.setAttribute('width', pl.rect.width * scale); r.setAttribute('height', pl.rect.height * scale);
+    r.setAttribute('fill', color); r.setAttribute('fill-opacity', '0.7');
+    r.setAttribute('stroke', color); r.setAttribute('stroke-width', '1.5');
+    const t = document.createElementNS(svgNs, 'text');
+    t.setAttribute('x', pl.rect.x * scale + 4); t.setAttribute('y', pl.rect.y * scale + 14);
+    t.setAttribute('font-size', '11'); t.setAttribute('fill', '#fff'); t.setAttribute('font-weight', '700');
+    t.textContent = `P${pl.patchIndex + 1}`;
+    pg.appendChild(r); pg.appendChild(t);
+    g.appendChild(pg);
+    patchEls.set(pl.patchIndex, { pg, r });
+  });
+
+  // 全部锯缝带（淡显，标号＝下刀次序）
+  const bandEls = [];
+  let cutNo = 0;
+  (rv.steps || []).forEach((s) => {
+    if (s.kind !== 'cut') return;
+    cutNo += 1;
+    const bx = s.dir === 'vertical' ? s.at * scale : s.region.x * scale;
+    const by = s.dir === 'horizontal' ? s.at * scale : s.region.y * scale;
+    const bw = s.dir === 'vertical' ? Math.max(kerf * scale, 2) : s.region.width * scale;
+    const bh = s.dir === 'horizontal' ? Math.max(kerf * scale, 2) : s.region.height * scale;
+    const band = document.createElementNS(svgNs, 'rect');
+    band.setAttribute('x', bx); band.setAttribute('y', by);
+    band.setAttribute('width', bw); band.setAttribute('height', bh);
+    band.setAttribute('fill', '#b03a2e'); band.setAttribute('fill-opacity', '0.12');
+    band.setAttribute('stroke', '#b03a2e'); band.setAttribute('stroke-dasharray', '3 2');
+    band.setAttribute('stroke-width', '0.8');
+    const label = document.createElementNS(svgNs, 'text');
+    const lx = s.dir === 'vertical' ? bx + bw / 2 : bx + 4;
+    const ly = s.dir === 'horizontal' ? by + bh / 2 + 3 : by + 12;
+    label.setAttribute('x', lx); label.setAttribute('y', ly);
+    label.setAttribute('font-size', '10'); label.setAttribute('fill', '#7c2419');
+    label.setAttribute('font-weight', '700');
+    label.textContent = String(cutNo);
+    g.appendChild(band); g.appendChild(label);
+    bandEls.push({ step: s, band, label });
+  });
+
+  // 活动剩余矩形轮廓层（滑块驱动）
+  const regionLayer = document.createElementNS(svgNs, 'g');
+  g.appendChild(regionLayer);
+
+  function render(states, t) {
+    const st = states[t];
+    regionLayer.innerHTML = '';
+    st.regions.forEach((rg) => {
+      const r = document.createElementNS(svgNs, 'rect');
+      r.setAttribute('x', rg.x * scale); r.setAttribute('y', rg.y * scale);
+      r.setAttribute('width', rg.width * scale); r.setAttribute('height', rg.height * scale);
+      r.setAttribute('fill', 'none'); r.setAttribute('stroke', '#1b3350');
+      r.setAttribute('stroke-width', '1.6'); r.setAttribute('stroke-dasharray', '6 3');
+      regionLayer.appendChild(r);
+    });
+    patchEls.forEach((els, pi) => {
+      const taken = st.removed.has(pi);
+      els.r.setAttribute('fill-opacity', taken ? '0.12' : '0.7');
+      els.pg.setAttribute('opacity', taken ? '0.55' : '1');
+    });
+    bandEls.forEach(({ step, band, label }) => {
+      const active = st.band && st.band.dir === step.dir && st.band.at === step.at;
+      band.setAttribute('fill-opacity', active ? '0.42' : '0.12');
+      band.setAttribute('stroke-width', active ? '2' : '0.8');
+      label.setAttribute('opacity', active ? '1' : '0.55');
+    });
+  }
+
+  return { svg, render };
+}
+
 // ---------- 结论区 ----------
 
 function renderResult() {
   const body = $('#result-body');
-  const banner = $('#stale-banner');
   const r = state.result;
+  updateStaleBanner();
 
   if (!r) {
-    banner.classList.add('hidden');
     body.innerHTML = '<p class="hint">尚未排版。</p>';
     return;
   }
-
-  const stale = r.version !== state.version || state.resultVersion === -1;
-  banner.classList.toggle('hidden', !stale);
 
   const out = r.output;
   if (!out.feasible) {
@@ -420,6 +771,7 @@ function renderAll() {
   renderCanvases();
   renderPatches();
   renderResult();
+  renderCutResult();
   // 数量约束按钮可用性
   $('#btn-add-canvas').disabled = state.draft.canvases.length >= 3;
   $('#btn-add-patch').disabled = state.draft.patches.length >= 5;
@@ -443,9 +795,12 @@ async function onSave() {
     state.version = r.version;
     state.result = null;
     state.resultVersion = null;
+    state.cutResult = null;
+    state.cutResultVersion = null;
     $('#errors').classList.add('hidden');
     renderResult();
-    setStatus('草稿已保存，旧排版结论已失效', 'saved');
+    renderCutResult();
+    setStatus('草稿已保存，旧排版与裁切复核结论均已失效', 'saved');
   } catch (e) {
     showErrors(e.errors || [e.message]);
     setStatus('保存被拒绝', 'error');
@@ -458,15 +813,51 @@ async function onPlan() {
     // 先保存当前编辑（保证结论针对当前草稿版本），再求方案。
     const save = await api('/api/draft', { method: 'PUT', body: JSON.stringify({ draft: state.draft }) });
     state.version = save.version;
+    // 保存使服务端旧裁切复核失效：保留页面展示但标记为旧结论（横幅提示重新复核）。
+    if (state.cutResult) state.cutResultVersion = -1;
     const r = await api('/api/plan', { method: 'POST' });
     state.result = r.result;
     state.resultVersion = r.result.version;
     $('#errors').classList.add('hidden');
     renderResult();
-    setStatus(r.result.output.feasible ? `排版完成（草稿版本 v${r.version}）` : '排版完成：无解', 'saved');
+    renderCutResult();
+    setStatus(r.result.output.feasible ? `排版完成（草稿版本 v${r.version}）；如需裁切请重新复核` : '排版完成：无解', 'saved');
   } catch (e) {
     showErrors(e.errors || [e.message]);
     setStatus('无法排版：草稿未通过校验', 'error');
+  }
+}
+
+async function onCutReview() {
+  const kerf = Number.parseInt($('#inp-kerf').value, 10);
+  if (!Number.isInteger(kerf) || kerf <= 0) {
+    showErrors(['锯缝宽度须为正整数。']);
+    setStatus('复核被拒绝：锯缝宽度非法', 'error');
+    return;
+  }
+  state.kerf = kerf;
+  setStatus('裁切复核中（先重新联合排版）…');
+  try {
+    // 先保存当前草稿（服务端版本推进），再发起复核；
+    // 采用结果由服务端按当前草稿重新排版产生，页面不上传任何采用结果。
+    const save = await api('/api/draft', { method: 'PUT', body: JSON.stringify({ draft: state.draft }) });
+    state.version = save.version;
+    const r = await api('/api/cut-review', { method: 'POST', body: JSON.stringify({ kerf }) });
+    state.cutResult = r.cutResult;
+    state.cutResultVersion = r.cutResult.version;
+    // 复核内部重排的结果同步为当前排版结论（同一草稿版本）。
+    state.result = { version: r.cutResult.version, output: r.cutResult.plan };
+    state.resultVersion = r.cutResult.version;
+    $('#errors').classList.add('hidden');
+    renderResult();
+    renderCutResult();
+    const ok = r.cutResult.review && r.cutResult.review.feasible;
+    setStatus(ok
+      ? `裁切复核完成：共 ${r.cutResult.review.totalCuts} 刀（锯缝 ${kerf}，草稿 v${r.version}）`
+      : (r.cutResult.review ? '裁切复核完成：存在锯缝阻断' : '草稿无解，无法复核'), 'saved');
+  } catch (e) {
+    showErrors(e.errors || [e.message]);
+    setStatus('无法复核：请求被拒绝', 'error');
   }
 }
 
@@ -476,6 +867,10 @@ async function onReset() {
   state.version = r.version;
   state.result = null;
   state.resultVersion = null;
+  state.cutResult = null;
+  state.cutResultVersion = null;
+  state.kerf = 2;
+  $('#inp-kerf').value = 2;
   $('#errors').classList.add('hidden');
   renderAll();
   setStatus('已恢复内置示例草稿', 'saved');
@@ -484,6 +879,10 @@ async function onReset() {
 $('#btn-plan').addEventListener('click', onPlan);
 $('#btn-save').addEventListener('click', onSave);
 $('#btn-reset').addEventListener('click', onReset);
+$('#btn-cut-review').addEventListener('click', onCutReview);
+$('#inp-kerf').addEventListener('change', () => {
+  markCutDirty();
+});
 
 load().catch((e) => {
   $('#result-body').innerHTML = `<p class="verdict-bad">加载草稿失败：${escapeHtml(e.message)}</p>`;

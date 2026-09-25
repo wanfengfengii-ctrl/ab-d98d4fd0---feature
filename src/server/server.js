@@ -2,8 +2,9 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { validateDraft } from '../core/validation.js';
+import { validateDraft, validateKerf } from '../core/validation.js';
 import { planLayout } from '../core/planner.js';
+import { reviewCutting } from '../core/cutting.js';
 import { defaultDraft } from './defaultDraft.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,13 +20,14 @@ export function createApp() {
   let currentVersion = 0;
   let draft = structuredClone(defaultDraft);
   let result = null; // { version, output }
+  let cutResult = null; // { version, kerf, plan, review }
 
   app.get('/healthz', (_req, res) => {
     res.json({ status: 'ok', version: currentVersion });
   });
 
   app.get('/api/draft', (_req, res) => {
-    res.json({ version: currentVersion, draft, result });
+    res.json({ version: currentVersion, draft, result, cutResult });
   });
 
   // 保存草稿（任何修改都会使旧结论失效）。
@@ -37,7 +39,8 @@ export function createApp() {
     }
     currentVersion += 1;
     draft = incoming;
-    result = null; // 旧结论随草稿修改立即失效
+    result = null;    // 旧排版结论随草稿修改立即失效
+    cutResult = null; // 旧裁切复核结论同样失效
     return res.json({ ok: true, version: currentVersion });
   });
 
@@ -46,14 +49,35 @@ export function createApp() {
     currentVersion += 1;
     draft = structuredClone(defaultDraft);
     result = null;
+    cutResult = null;
     res.json({ ok: true, version: currentVersion, draft });
   });
 
   // 运行联合排版；结论与当前草稿版本绑定。
-  app.post('/api/plan', (_req, res) => {
+  app.post('/api/plan', (req, res) => {
     const output = planLayout(draft);
     result = { version: currentVersion, output };
     res.json({ ok: true, version: currentVersion, result });
+  });
+
+  // 直线裁切顺序复核。
+  // 必须先按当前草稿重新执行联合排版取得“采用裁片”，不接收页面上传的采用结果；
+  // 请求体仅提供正整数锯缝宽度 kerf。
+  app.post('/api/cut-review', (req, res) => {
+    const kerf = req.body && req.body.kerf;
+    const kerfCheck = validateKerf(kerf);
+    if (!kerfCheck.ok) {
+      return res.status(400).json({ ok: false, errors: kerfCheck.errors });
+    }
+    // 无论如何先重新跑联合排版，采用结果一律以服务端当前草稿为准。
+    const plan = planLayout(draft);
+    if (!plan.feasible) {
+      cutResult = { version: currentVersion, kerf, plan, review: null };
+      return res.json({ ok: true, version: currentVersion, cutResult });
+    }
+    const review = reviewCutting(draft, plan, kerf);
+    cutResult = { version: currentVersion, kerf, plan, review };
+    return res.json({ ok: true, version: currentVersion, cutResult });
   });
 
   const distDir = path.join(root, 'dist');
