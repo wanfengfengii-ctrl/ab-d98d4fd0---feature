@@ -138,3 +138,24 @@ svg.sheet { background: #e9dfc6; border: 2px solid #6b5c3c; border-radius: 3px; 
 .detail-table tr.chosen td:first-child { border-left: 4px solid var(--green); }
 .detail-table tr.excluded td:first-child { border-left: 4px solid #c6b08d; }
 .muted { color: #8c8574; }
+
+/* 裁切复核区 */
+.review-controls { margin: 8px 0 10px; }
+.review-controls input { width: 90px; }
+.bad-legend { color: var(--red) !important; }
+
+.cut-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fffaf0;
+}
+.cut-step.blocked { border-color: #e0a89e; background: #fdf3f1; }
+.cut-step svg.sheet.cut { margin-top: 0; border-width: 1px; }
+.cut-caption { flex: 1; min-width: 260px; font-size: 12.5px; line-height: 1.7; color: #4c4436; }
+.cut-caption b { color: var(--navy); }

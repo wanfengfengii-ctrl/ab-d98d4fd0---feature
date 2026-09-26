@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { validateDraft } from '../core/validation.js';
 import { planLayout } from '../core/planner.js';
+import { reviewCutting } from '../core/cutting.js';
 import { defaultDraft } from './defaultDraft.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -18,14 +19,15 @@ export function createApp() {
   // 内存中的“草稿 + 结论”。结论仅对生成它的草稿版本有效（version 单调递增）。
   let currentVersion = 0;
   let draft = structuredClone(defaultDraft);
-  let result = null; // { version, output }
+  let result = null; // { version, output } 联合排版结论
+  let cutReview = null; // { version, kerf, output } 锯缝裁切复核结论（与草稿版本、锯缝宽度绑定）
 
   app.get('/healthz', (_req, res) => {
     res.json({ status: 'ok', version: currentVersion });
   });
 
   app.get('/api/draft', (_req, res) => {
-    res.json({ version: currentVersion, draft, result });
+    res.json({ version: currentVersion, draft, result, cutReview });
   });
 
   // 保存草稿（任何修改都会使旧结论失效）。
@@ -38,6 +40,7 @@ export function createApp() {
     currentVersion += 1;
     draft = incoming;
     result = null; // 旧结论随草稿修改立即失效
+    cutReview = null; // 裁切复核结论一并失效
     return res.json({ ok: true, version: currentVersion });
   });
 
@@ -46,6 +49,7 @@ export function createApp() {
     currentVersion += 1;
     draft = structuredClone(defaultDraft);
     result = null;
+    cutReview = null;
     res.json({ ok: true, version: currentVersion, draft });
   });
 
@@ -54,6 +58,18 @@ export function createApp() {
     const output = planLayout(draft);
     result = { version: currentVersion, output };
     res.json({ ok: true, version: currentVersion, result });
+  });
+
+  // 直线裁切顺序复核：按当前草稿重新执行联合排版后逐帆布验证贯穿裁切。
+  // 只接收正整数锯缝宽度，不接收页面上传的采用结果。
+  app.post('/api/cut-review', (req, res) => {
+    const kerf = req.body ? req.body.kerf : null;
+    if (!Number.isInteger(kerf) || kerf < 1) {
+      return res.status(400).json({ ok: false, errors: ['锯缝宽度须为正整数（像素）。'] });
+    }
+    const output = reviewCutting(draft, kerf);
+    cutReview = { version: currentVersion, kerf, output };
+    return res.json({ ok: true, version: currentVersion, review: cutReview });
   });
 
   const distDir = path.join(root, 'dist');

@@ -50,6 +50,24 @@
             避免局部挑选最省料位置后使其他补片无处可裁。</p>
           <div id="result-body"></div>
         </section>
+
+        <section id="review" class="card">
+          <h2>直线裁切顺序复核（锯缝）</h2>
+          <p class="hint">填写正整数锯缝宽度后发起复核：系统将按当前草稿<strong>重新执行联合排版</strong>
+            （不采用页面上传的旧结论），再逐帆布验证采用裁片能否用贯穿直线依次切下——
+            每刀在一块尚未分割的剩余矩形内作横或竖的贯穿直线，锯缝占据同宽带状区域并把两侧分成独立剩余矩形，
+            锯缝带不得与任何采用裁片正面积相交（边贴边允许）；只剩单块裁片的区域即可取下，废料区域停止处理。
+            在全部能保全裁片的切法中，取「总刀数最少、按帆布录入顺序展开的切线（坐标, 方向）序列最小」的方案；
+            无法裁切时按帆布和步骤顺序给出首个被锯缝阻断的裁片证据。</p>
+          <div class="row review-controls">
+            <span class="field"><label>锯缝宽度（正整数）</label><input id="kerf-input" type="number" min="1" step="1" value="1" /></span>
+            <button id="btn-review" class="primary" type="button">🪚 复核裁切顺序</button>
+          </div>
+          <section id="review-stale" class="banner hidden">
+            ⚠ 草稿或锯缝宽度已变更，以下为<strong>已失效的旧复核结论</strong>，请重新发起复核。
+          </section>
+          <div id="review-body"></div>
+        </section>
       </div>
     </div>
   </main>
